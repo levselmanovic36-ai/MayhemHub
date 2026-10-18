@@ -282,8 +282,9 @@ local isBrambleModel
 
 local function getMonsterTypeLabel(model)
     if not model then return "Unknown entity" end
-    if isBrambleModel and isBrambleModel(model) then return "Bramble" end
 
+    -- Prefer explicit game metadata first. The entity model is often named after
+    -- its player (for example, SikeIs18), so the player name is not the monster type.
     for _, attributeName in ipairs({"MonsterName", "MonsterType", "EntityName", "EntityType", "Type"}) do
         local value = model:GetAttribute(attributeName)
         if typeof(value) == "string" and value ~= "" then
@@ -292,10 +293,29 @@ local function getMonsterTypeLabel(model)
     end
 
     local lowerName = string.lower(model.Name)
-    for _, knownName in ipairs({"figure", "seek", "rush", "halt", "eyes", "bramble", "honcho", "noise"}) do
-        if string.find(lowerName, knownName, 1, true) then
-            return knownName:sub(1, 1):upper() .. knownName:sub(2)
+    local knownNames = {
+        {"guidinglight", "Guiding Light"},
+        {"guiding light", "Guiding Light"},
+        {"guiding_light", "Guiding Light"},
+        {"figure", "Figure"},
+        {"seek", "Seek"},
+        {"rush", "Rush"},
+        {"halt", "Halt"},
+        {"eyes", "Eyes"},
+        {"bramble", "Bramble"},
+        {"honcho", "Honcho"},
+        {"noise", "Noise"},
+    }
+    for _, entry in ipairs(knownNames) do
+        if string.find(lowerName, entry[1], 1, true) then
+            return entry[2]
         end
+    end
+
+    -- LanternNeon is a Bramble-specific visual marker in MAYHEM. Do not use
+    -- the generic `ab1` child alone: other entity models may contain that name.
+    if model:FindFirstChild("LanternNeon", true) then
+        return "Bramble"
     end
 
     return "Unknown entity"
@@ -449,8 +469,8 @@ end
 isBrambleModel = function(model)
     if not model then return false end
     local lowerName = string.lower(model.Name)
-    return model:FindFirstChild("ab1", true) ~= nil
-        or model:FindFirstChild("LanternNeon", true) ~= nil
+    -- Avoid treating every entity with a generic `ab1` node as Bramble.
+    return model:FindFirstChild("LanternNeon", true) ~= nil
         or string.find(lowerName, "bramble", 1, true) ~= nil
 end
 
@@ -604,12 +624,11 @@ workspaceChildAddedConnection = Workspace.ChildAdded:Connect(function(child)
     end
 end)
 
--- Entity Hazards ESP: BrambleLantern, BrambleLotus, SeekPuddle, and FigureSnare.
--- All four hazard types share one toggle and are only highlighted locally.
+-- Entity Hazards ESP: BrambleLantern, BrambleLotus, and FigureSnare.
+-- All three hazard types share one toggle and are only highlighted locally.
 local ENTITY_HAZARD_CONFIG = {
     bramblelantern = {Label = "Bramble Lantern", Color = Color3.fromRGB(80, 220, 255)},
     bramblelotus = {Label = "Bramble Lotus", Color = Color3.fromRGB(100, 255, 130)},
-    seekpuddle = {Label = "Seek Puddle", Color = Color3.fromRGB(70, 120, 255)},
     figuresnare = {Label = "Figure Snare", Color = Color3.fromRGB(255, 180, 70)},
 }
 
