@@ -81,7 +81,7 @@ local Settings = {
     MonsterESP = false,
     ExitESP = false,
     AbilityDetector = false,
-    BrambleLanternESP = false,
+    EntityHazards = false,
     FullBright = false,
     NoFog = false,
 }
@@ -303,16 +303,26 @@ end
 
 local function getMonsterAbilityLine(model, activeStatus)
     local lowerStatus = string.lower(tostring(activeStatus or ""))
-    if isBrambleModel and isBrambleModel(model) then
-        if string.find(lowerStatus, "ability 1 active", 1, true) then
-            return "[Если включено] Ability 1 active"
-        end
-        return "[Если включено] Ability 1 inactive"
+    if string.find(lowerStatus, "ability 1 active", 1, true) then
+        return "Ability 1 Active"
     end
     if string.find(lowerStatus, "ability 2 active", 1, true) then
-        return "[Если включено] Ability 2 active"
+        return "Ability 2 Active"
     end
-    return "[Если включено] Ability inactive"
+    -- Do not display inactive/empty placeholder lines under monster names.
+    return nil
+end
+
+local function makeMonsterESPText(model, monsterName, activeStatus)
+    local lines = {
+        tostring(monsterName or model.Name),
+        getMonsterTypeLabel(model),
+    }
+    local abilityLine = getMonsterAbilityLine(model, activeStatus)
+    if abilityLine then
+        table.insert(lines, abilityLine)
+    end
+    return table.concat(lines, "\n")
 end
 
 local function makeMonsterESP(model, monsterName)
@@ -347,7 +357,7 @@ local function makeMonsterESP(model, monsterName)
     label.Name = "MonsterStatusText"
     label.Size = UDim2.fromScale(1, 1)
     label.BackgroundTransparency = 1
-    label.Text = tostring(monsterName or model.Name) .. "\n" .. getMonsterTypeLabel(model) .. "\n" .. getMonsterAbilityLine(model, nil)
+    label.Text = makeMonsterESPText(model, monsterName, nil)
     label.TextColor3 = color
     label.TextStrokeTransparency = 0.25
     label.Font = Enum.Font.GothamBold
@@ -594,56 +604,94 @@ workspaceChildAddedConnection = Workspace.ChildAdded:Connect(function(child)
     end
 end)
 
--- Optional ESP for live BrambleLantern objects in Workspace.Debris.
--- It only draws local Highlight/BillboardGui instances and never changes the lamp.
-local brambleLanternESPObjects = {}
-local brambleLampESPFolder = nil
-local brambleLampDescendantAddedConnection = nil
-local brambleLampWorkspaceAddedConnection = nil
+-- Entity Hazards ESP: BrambleLantern, BrambleLotus, SeekPuddle, and FigureSnare.
+-- All four hazard types share one toggle and are only highlighted locally.
+local ENTITY_HAZARD_CONFIG = {
+    bramblelantern = {Label = "Bramble Lantern", Color = Color3.fromRGB(80, 220, 255)},
+    bramblelotus = {Label = "Bramble Lotus", Color = Color3.fromRGB(100, 255, 130)},
+    seekpuddle = {Label = "Seek Puddle", Color = Color3.fromRGB(70, 120, 255)},
+    figuresnare = {Label = "Figure Snare", Color = Color3.fromRGB(255, 180, 70)},
+}
 
-local function removeBrambleLanternESP(obj)
-    local data = brambleLanternESPObjects[obj]
+local entityHazardESPObjects = {}
+local entityHazardsDescendantAddedConnection = nil
+
+local function removeEntityHazardESP(obj)
+    local data = entityHazardESPObjects[obj]
     if not data then return end
     if data.highlight then pcall(function() data.highlight:Destroy() end) end
     if data.label then pcall(function() data.label:Destroy() end) end
-    brambleLanternESPObjects[obj] = nil
+    entityHazardESPObjects[obj] = nil
 end
 
-local function addBrambleLanternESP(obj)
-    if not Settings.BrambleLanternESP or not obj or normalizeName(obj.Name) ~= "bramblelantern" then return end
-    if brambleLanternESPObjects[obj] then return end
-    if not (obj:IsA("Model") or obj:IsA("BasePart")) then return end
+local function getHazardAdornment(obj)
+    if not obj then return nil, nil end
 
-    local adornee = nil
-    if obj:IsA("BasePart") then
-        adornee = obj
-    else
-        adornee = obj.PrimaryPart
-        if not adornee then
+    if obj:IsA("Model") then
+        local part = obj.PrimaryPart
+        if not part then
             for _, descendant in ipairs(obj:GetDescendants()) do
                 if descendant:IsA("BasePart") then
-                    adornee = descendant
+                    part = descendant
                     break
                 end
             end
         end
+        if part then return obj, part end
+        return nil, nil
+    elseif obj:IsA("BasePart") then
+        return obj, obj
     end
-    if not adornee then return end
 
-    local color = Color3.fromRGB(80, 220, 255)
+    -- Some map hazards may be folders/attachments rather than Models.
+    -- Prefer their nearest containing Model; otherwise use a BasePart descendant.
+    local ancestor = obj.Parent
+    while ancestor and ancestor ~= Workspace do
+        if ancestor:IsA("Model") then
+            local part = ancestor.PrimaryPart
+            if not part then
+                for _, descendant in ipairs(ancestor:GetDescendants()) do
+                    if descendant:IsA("BasePart") then
+                        part = descendant
+                        break
+                    end
+                end
+            end
+            if part then return ancestor, part end
+        end
+        ancestor = ancestor.Parent
+    end
+
+    for _, descendant in ipairs(obj:GetDescendants()) do
+        if descendant:IsA("BasePart") then
+            return descendant, descendant
+        end
+    end
+    return nil, nil
+end
+
+local function addEntityHazardESP(obj)
+    if not Settings.EntityHazards or not obj then return end
+    local config = ENTITY_HAZARD_CONFIG[normalizeName(obj.Name)]
+    if not config or entityHazardESPObjects[obj] then return end
+    if not obj:IsDescendantOf(Workspace) then return end
+
+    local highlightTarget, labelPart = getHazardAdornment(obj)
+    if not highlightTarget or not labelPart then return end
+
     local highlight = Instance.new("Highlight")
-    highlight.Name = "MayhemBrambleLanternESP"
-    highlight.Adornee = obj
-    highlight.FillColor = color
-    highlight.OutlineColor = color
+    highlight.Name = "MayhemEntityHazardESP"
+    highlight.Adornee = highlightTarget
+    highlight.FillColor = config.Color
+    highlight.OutlineColor = config.Color
     highlight.FillTransparency = 0.72
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     highlight.Parent = gui
 
     local bill = Instance.new("BillboardGui")
-    bill.Name = "MayhemBrambleLanternLabel"
-    bill.Adornee = adornee
-    bill.Size = UDim2.fromOffset(170, 24)
+    bill.Name = "MayhemEntityHazardLabel"
+    bill.Adornee = labelPart
+    bill.Size = UDim2.fromOffset(180, 24)
     bill.StudsOffset = Vector3.new(0, 2.2, 0)
     bill.AlwaysOnTop = true
     bill.Parent = gui
@@ -651,59 +699,51 @@ local function addBrambleLanternESP(obj)
     local label = Instance.new("TextLabel")
     label.Size = UDim2.fromScale(1, 1)
     label.BackgroundTransparency = 1
-    label.Text = "BrambleLantern"
-    label.TextColor3 = color
+    label.Text = config.Label
+    label.TextColor3 = config.Color
     label.TextStrokeTransparency = 0.2
     label.Font = Enum.Font.GothamBold
     label.TextSize = 13
     label.Parent = bill
 
-    brambleLanternESPObjects[obj] = {highlight = highlight, label = bill}
-    obj.AncestryChanged:Connect(function(_, parent)
-        if not parent then removeBrambleLanternESP(obj) end
+    entityHazardESPObjects[obj] = {highlight = highlight, label = bill}
+    obj.AncestryChanged:Connect(function()
+        if not obj:IsDescendantOf(Workspace) then
+            removeEntityHazardESP(obj)
+        end
     end)
 end
 
-local function watchBrambleLampFolder(folder)
-    if brambleLampESPFolder == folder then return end
-    if brambleLampDescendantAddedConnection then
-        pcall(function() brambleLampDescendantAddedConnection:Disconnect() end)
-        brambleLampDescendantAddedConnection = nil
-    end
-    brambleLampESPFolder = folder
-    if folder and Settings.BrambleLanternESP then
-        for _, descendant in ipairs(folder:GetDescendants()) do
-            addBrambleLanternESP(descendant)
-        end
-        brambleLampDescendantAddedConnection = folder.DescendantAdded:Connect(function(descendant)
-            addBrambleLanternESP(descendant)
-        end)
-    end
-end
-
-local function setBrambleLanternESPEnabled(state)
-    Settings.BrambleLanternESP = state
+local function setEntityHazardsEnabled(state)
+    Settings.EntityHazards = state
     if not state then
-        if brambleLampDescendantAddedConnection then
-            pcall(function() brambleLampDescendantAddedConnection:Disconnect() end)
-            brambleLampDescendantAddedConnection = nil
+        if entityHazardsDescendantAddedConnection then
+            pcall(function() entityHazardsDescendantAddedConnection:Disconnect() end)
+            entityHazardsDescendantAddedConnection = nil
         end
-        if brambleLampWorkspaceAddedConnection then
-            pcall(function() brambleLampWorkspaceAddedConnection:Disconnect() end)
-            brambleLampWorkspaceAddedConnection = nil
-        end
-        brambleLampESPFolder = nil
-        for obj in pairs(brambleLanternESPObjects) do
-            removeBrambleLanternESP(obj)
+        for obj in pairs(entityHazardESPObjects) do
+            removeEntityHazardESP(obj)
         end
         return
     end
 
-    watchBrambleLampFolder(Workspace:FindFirstChild("Debris"))
-    brambleLampWorkspaceAddedConnection = Workspace.ChildAdded:Connect(function(child)
-        if child.Name == "Debris" and Settings.BrambleLanternESP then
-            watchBrambleLampFolder(child)
-        end
+    -- Initial scan of existing hazards.
+    for _, descendant in ipairs(Workspace:GetDescendants()) do
+        addEntityHazardESP(descendant)
+    end
+
+    -- Catch newly spawned hazards, including models whose parts arrive a moment later.
+    if entityHazardsDescendantAddedConnection then
+        pcall(function() entityHazardsDescendantAddedConnection:Disconnect() end)
+    end
+    entityHazardsDescendantAddedConnection = Workspace.DescendantAdded:Connect(function(instance)
+        task.defer(function()
+            local current = instance
+            while current and current ~= Workspace do
+                addEntityHazardESP(current)
+                current = current.Parent
+            end
+        end)
     end)
 end
 
@@ -740,9 +780,9 @@ local function updateMonsterAbilityLine(model, activeStatus)
     local data = playerESPObjects[model]
     if not data or not data.isMonster or not data.textLabel or not data.textLabel.Parent then return end
     local status = getMonsterAbilityLine(model, activeStatus)
-    local text = tostring(data.monsterName or model.Name) .. "\n" .. getMonsterTypeLabel(model) .. "\n" .. status
+    local text = makeMonsterESPText(model, data.monsterName, activeStatus)
     if data.lastText == text then return end
-    data.abilityStatus = status
+    data.abilityStatus = status or ""
     data.lastText = text
     data.textLabel.Text = text
 end
@@ -1493,8 +1533,8 @@ local function addToggle(page, y, text, key)
             setExitESPEnabled(Settings.ExitESP)
         elseif key == "AbilityDetector" then
             setAbilityDetectorEnabled(Settings.AbilityDetector)
-        elseif key == "BrambleLanternESP" then
-            setBrambleLanternESPEnabled(Settings.BrambleLanternESP)
+        elseif key == "EntityHazards" then
+            setEntityHazardsEnabled(Settings.EntityHazards)
         end
 
         if key == "FOVEnabled" then
@@ -1548,7 +1588,7 @@ addToggle(pages["General"], 242, "Instant Interact", "InstantInteract")
 addToggle(pages["Visual"], 12, "Item ESP", "ItemESP")
 addToggle(pages["Visual"], 58, "Player ESP", "PlayerESP")
 addToggle(pages["Visual"], 104, "Monster ESP", "MonsterESP")
-addToggle(pages["Visual"], 150, "Bramble Lantern ESP", "BrambleLanternESP")
+addToggle(pages["Visual"], 150, "Entity Hazards", "EntityHazards")
 addToggle(pages["Visual"], 196, "Exit ESP", "ExitESP")
 addToggle(pages["Visual"], 242, "Ability Detector", "AbilityDetector")
 addToggle(pages["Visual"], 288, "Full Bright", "FullBright")
