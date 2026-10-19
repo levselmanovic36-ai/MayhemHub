@@ -280,23 +280,69 @@ end
 -- Forward declaration: the detector is defined below, but ESP labels use it too.
 local isBrambleModel
 
-local function getMonsterTypeLabel(model)
-    if not model then return "Unknown entity" end
+-- Resolve entity names from the Script objects found inside each entity model.
+-- The model itself can be named after a player, so *CharHandler scripts are
+-- the primary signal; ability nodes such as ab1/ab2 are not used as type IDs.
+local CHAR_HANDLER_TYPES = {
+    rushcharhandler = "Rush",
+    eyescharhandler = "Eyes",
+    haltcharhandler = "Halt",
+    seekcharhandler = "Seek",
+    guidancecharhandler = "Guiding Light",
+    figurecharhandler = "Figure",
+    bramblecharhandler = "Bramble",
+    honchocharhandler = "Honcho",
+    noisecharhandler = "Noise",
+}
 
-    -- Prefer explicit game metadata first. The entity model is often named after
-    -- its player (for example, SikeIs18), so the player name is not the monster type.
+local function splitCamelCaseName(name)
+    -- Convert names such as WorldLotus into World Lotus for unlisted handlers.
+    return (name:gsub("(%l)(%u)", "%1 %2"))
+end
+
+local function getMonsterTypeLabel(model)
+    if not model then return nil end
+
+    local genericHandlerType = nil
+    for _, descendant in ipairs(model:GetDescendants()) do
+        if descendant:IsA("Script") or descendant:IsA("LocalScript") then
+            local normalizedScriptName = normalizeName(descendant.Name)
+            local mappedType = CHAR_HANDLER_TYPES[normalizedScriptName]
+            if mappedType then
+                return mappedType
+            end
+
+            -- Other MAYHEM monsters use the same <Monster>CharHandler naming
+            -- convention. Preserve support for those without hard-coding each one.
+            if string.sub(normalizedScriptName, -12) == "charhandler" then
+                local prefix = string.sub(descendant.Name, 1, #descendant.Name - 12)
+                if prefix ~= "" and not genericHandlerType then
+                    genericHandlerType = splitCamelCaseName(prefix)
+                end
+            end
+        end
+    end
+    if genericHandlerType then
+        return genericHandlerType
+    end
+
+    -- Secondary detection: explicit metadata, if present.
     for _, attributeName in ipairs({"MonsterName", "MonsterType", "EntityName", "EntityType", "Type"}) do
         local value = model:GetAttribute(attributeName)
         if typeof(value) == "string" and value ~= "" then
+            local normalizedValue = normalizeName(value)
+            local mappedType = CHAR_HANDLER_TYPES[normalizedValue .. "charhandler"]
+            if mappedType then
+                return mappedType
+            end
             return value
         end
     end
 
-    local lowerName = string.lower(model.Name)
+    -- Final fallback for cases where the model itself is named after the entity.
+    local normalizedModelName = normalizeName(model.Name)
     local knownNames = {
         {"guidinglight", "Guiding Light"},
-        {"guiding light", "Guiding Light"},
-        {"guiding_light", "Guiding Light"},
         {"figure", "Figure"},
         {"seek", "Seek"},
         {"rush", "Rush"},
@@ -307,18 +353,18 @@ local function getMonsterTypeLabel(model)
         {"noise", "Noise"},
     }
     for _, entry in ipairs(knownNames) do
-        if string.find(lowerName, entry[1], 1, true) then
+        if string.find(normalizedModelName, entry[1], 1, true) then
             return entry[2]
         end
     end
 
-    -- LanternNeon is a Bramble-specific visual marker in MAYHEM. Do not use
-    -- the generic `ab1` child alone: other entity models may contain that name.
+    -- A LanternNeon is a Bramble-specific visual marker in MAYHEM.
     if model:FindFirstChild("LanternNeon", true) then
         return "Bramble"
     end
 
-    return "Unknown entity"
+    -- No placeholder row: avoid displaying "Unknown Entity" under the player name.
+    return nil
 end
 
 local function getMonsterAbilityLine(model, activeStatus)
@@ -334,10 +380,11 @@ local function getMonsterAbilityLine(model, activeStatus)
 end
 
 local function makeMonsterESPText(model, monsterName, activeStatus)
-    local lines = {
-        tostring(monsterName or model.Name),
-        getMonsterTypeLabel(model),
-    }
+    local lines = { tostring(monsterName or model.Name) }
+    local entityType = getMonsterTypeLabel(model)
+    if entityType and entityType ~= "" then
+        table.insert(lines, entityType)
+    end
     local abilityLine = getMonsterAbilityLine(model, activeStatus)
     if abilityLine then
         table.insert(lines, abilityLine)
