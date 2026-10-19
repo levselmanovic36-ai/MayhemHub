@@ -1,5 +1,5 @@
 -- DOORS: MAYHEM HUB
--- V17: monster ESP ability status, BrambleLantern ESP, and Exploits placeholder message.
+-- V18: Debris-only Entity Hazards ESP with Lotus variants, Figure Snare variants, and Bramble Snare.
 
 task.wait(2)
 
@@ -671,16 +671,30 @@ workspaceChildAddedConnection = Workspace.ChildAdded:Connect(function(child)
     end
 end)
 
--- Entity Hazards ESP: BrambleLantern, BrambleLotus, and FigureSnare.
--- All three hazard types share one toggle and are only highlighted locally.
+-- Entity Hazards ESP: only scan Workspace.Debris and its descendants.
+-- Known cosmetic/variant names are normalized and grouped under stable labels.
 local ENTITY_HAZARD_CONFIG = {
     bramblelantern = {Label = "Bramble Lantern", Color = Color3.fromRGB(80, 220, 255)},
+
     bramblelotus = {Label = "Bramble Lotus", Color = Color3.fromRGB(100, 255, 130)},
+    brambleroselotus = {Label = "Bramble Lotus", Color = Color3.fromRGB(100, 255, 130)},
+    bramblesakuralotus = {Label = "Bramble Lotus", Color = Color3.fromRGB(100, 255, 130)},
+    bramblenightcorelotus = {Label = "Bramble Lotus", Color = Color3.fromRGB(100, 255, 130)},
+
     figuresnare = {Label = "Figure Snare", Color = Color3.fromRGB(255, 180, 70)},
+    angelfiguresnare = {Label = "Figure Snare", Color = Color3.fromRGB(255, 180, 70)},
+    gweenfiguresnare = {Label = "Figure Snare", Color = Color3.fromRGB(255, 180, 70)},
+    treefiguresnare = {Label = "Figure Snare", Color = Color3.fromRGB(255, 180, 70)},
+    voxelsnare = {Label = "Figure Snare", Color = Color3.fromRGB(255, 180, 70)},
+
+    -- In this game, the Bramble Lotus snare is named exactly "Snare" in Debris.
+    snare = {Label = "Bramble Snare", Color = Color3.fromRGB(170, 255, 120)},
 }
 
 local entityHazardESPObjects = {}
 local entityHazardsDescendantAddedConnection = nil
+local entityHazardsWorkspaceChildAddedConnection = nil
+local entityHazardsDebrisFolder = nil
 
 local function removeEntityHazardESP(obj)
     local data = entityHazardESPObjects[obj]
@@ -780,6 +794,37 @@ local function addEntityHazardESP(obj)
     end)
 end
 
+local function scanEntityHazardsInDebris(debrisFolder)
+    if not debrisFolder or not debrisFolder.Parent then return end
+    for _, descendant in ipairs(debrisFolder:GetDescendants()) do
+        addEntityHazardESP(descendant)
+    end
+end
+
+local function attachEntityHazardsToDebris(debrisFolder)
+    if entityHazardsDescendantAddedConnection then
+        pcall(function() entityHazardsDescendantAddedConnection:Disconnect() end)
+        entityHazardsDescendantAddedConnection = nil
+    end
+    entityHazardsDebrisFolder = debrisFolder
+    if not debrisFolder then return end
+
+    scanEntityHazardsInDebris(debrisFolder)
+    entityHazardsDescendantAddedConnection = debrisFolder.DescendantAdded:Connect(function(instance)
+        task.defer(function()
+            if not Settings.EntityHazards or not entityHazardsDebrisFolder then return end
+            local current = instance
+            while current and current ~= entityHazardsDebrisFolder do
+                addEntityHazardESP(current)
+                current = current.Parent
+            end
+            if current == entityHazardsDebrisFolder then
+                addEntityHazardESP(current)
+            end
+        end)
+    end)
+end
+
 local function setEntityHazardsEnabled(state)
     Settings.EntityHazards = state
     if not state then
@@ -787,29 +832,26 @@ local function setEntityHazardsEnabled(state)
             pcall(function() entityHazardsDescendantAddedConnection:Disconnect() end)
             entityHazardsDescendantAddedConnection = nil
         end
+        if entityHazardsWorkspaceChildAddedConnection then
+            pcall(function() entityHazardsWorkspaceChildAddedConnection:Disconnect() end)
+            entityHazardsWorkspaceChildAddedConnection = nil
+        end
+        entityHazardsDebrisFolder = nil
         for obj in pairs(entityHazardESPObjects) do
             removeEntityHazardESP(obj)
         end
         return
     end
 
-    -- Initial scan of existing hazards.
-    for _, descendant in ipairs(Workspace:GetDescendants()) do
-        addEntityHazardESP(descendant)
+    -- Hazards are registered only when they are descendants of Workspace.Debris.
+    attachEntityHazardsToDebris(Workspace:FindFirstChild("Debris"))
+    if entityHazardsWorkspaceChildAddedConnection then
+        pcall(function() entityHazardsWorkspaceChildAddedConnection:Disconnect() end)
     end
-
-    -- Catch newly spawned hazards, including models whose parts arrive a moment later.
-    if entityHazardsDescendantAddedConnection then
-        pcall(function() entityHazardsDescendantAddedConnection:Disconnect() end)
-    end
-    entityHazardsDescendantAddedConnection = Workspace.DescendantAdded:Connect(function(instance)
-        task.defer(function()
-            local current = instance
-            while current and current ~= Workspace do
-                addEntityHazardESP(current)
-                current = current.Parent
-            end
-        end)
+    entityHazardsWorkspaceChildAddedConnection = Workspace.ChildAdded:Connect(function(child)
+        if child.Name == "Debris" and Settings.EntityHazards then
+            attachEntityHazardsToDebris(child)
+        end
     end)
 end
 
